@@ -2,50 +2,88 @@ require 'json'
 require 'csv'
 
 class Combine
-  def initialize(format = 'json', *input_files)
-    @format      = format
-    @input_files = input_files
+  def initialize(format = 'json', articles = nil, authors = nil, journals = nil)
+    @format     = format
+    @articles_f = articles
+    @authors_f  = authors
+    @journals_f = journals
   end
 
   def combine
-    return 'Error, at least one input file needed' if @input_files.empty?
-    open_files
-    raise @files[:articles].inspect
+    return 'Error, at least one input file needed' unless @articles_f || @authors_f || @journals_f
+    
+    result = []
+
+    CSV.foreach(File.path("resources/#{@articles_f}"), :headers => true) do |row|
+      doi     = row['DOI']
+      title   = row['Title']
+      issn    = row['ISSN']
+      journal = find_journal(issn)
+      author  = find_author(doi)
+
+      row = {
+        doi:           doi,
+        article_title: title,
+        author:        author,
+        journal_title: journal,
+        issn:          issn
+      }
+
+      result << row
+    end
+
+    format(result)
   end
 
   private
 
-  def open_files
-    @files ||= {}
-    @input_files.each do |f|
-      file_name, file_type = f.split('.')
+  def format(data)
+    if @format == 'json'
+      data.to_json
+    elsif @format == 'csv'
+      headers = %w(doi, article_title, authors, journal_title, issn)
+      CSV.generate do |csv|
+        csv << headers
 
-      result = if file_type == 'json'
-        parse_json(f)
-      elsif file_type == 'csv'
-        parse_csv(f)
-      end
-
-      @files[file_name.to_sym] = result
+        data.each do |row|
+          csv << [
+            row[:doi],
+            row[:article_title],
+            row[:author].join(', '),
+            row[:journal_title],
+            row[:issn]
+          ]
+        end
     end
-    @files
+    else
+      return 'Sorry, unknown format'
+    end
+  end
+
+  def find_journal(issn)
+    journals = parse_csv(@journals_f)
+
+    journal = journals.find { |r| r['ISSN'] = issn }
+
+    journal['Title'] if journal
+  end
+
+  def find_author(doi)
+    authors = parse_json(@authors_f)
+    result  = []
+
+    authors.each do |a|
+      result << a['name'] if a['articles'].include?(doi)
+    end
+
+    result
   end
 
   def parse_json(file_name)
-    file = File.open("resources/#{file_name}", 'rb').read
-    JSON.parse(file)
+    JSON.parse(File.open("resources/#{file_name}", 'rb').read)
   end
 
   def parse_csv(file_name)
-    # ugh this is horrible
-    file    = CSV.read("resources/#{file_name}")
-    headers = file[0]
-    body    = file[1,file.length]
-
-    body.each do |row|
-      row.map.with_index do |r,i|
-        i
-      end
-    end
+    CSV.new(File.new("resources/#{file_name}"), :headers => true)
   end
 end
